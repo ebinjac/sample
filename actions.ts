@@ -150,3 +150,54 @@ export async function getCertificates() {
     orderBy: (cert, { desc }) => [desc(cert.createdAt)],
   });
 }
+
+export const insertCertificateSchema = createInsertSchema(certificates, {
+  certificateIdentifier: z.string().min(1, {
+    message: "Certificate Identifier is required",
+  }),
+  renewingTeamId: z.string().uuid({
+    message: "Valid Team ID is required",
+  }),
+  isAmexCert: z.boolean().default(false),
+  commonName: z.string().optional(),
+  serialNumber: z.string().optional(),
+})
+  .superRefine(async (data, ctx) => {
+    // Only validate for non-AMEX certs
+    if (!data.isAmexCert) {
+      const existingCert = await db.query.certificates.findFirst({
+        where: (cert, { and, eq }) => and(
+          eq(cert.certificateIdentifier, data.certificateIdentifier),
+          eq(cert.renewingTeamId, data.renewingTeamId)
+        ),
+      });
+
+      if (existingCert) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Certificate already exists for this team",
+          path: ["certificateIdentifier"],
+        });
+      }
+    }
+
+    // Additional validation for AMEX certs
+    if (data.isAmexCert) {
+      if (!data.commonName && !data.serialNumber) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Either Common Name or Serial Number is required for AMEX certs",
+          path: ["commonName"],
+        });
+      }
+    }
+  })
+  .transform((data) => ({
+    ...data,
+    certificateIdentifier: data.certificateIdentifier?.trim(),
+    commonName: data.commonName?.trim(),
+    serialNumber: data.serialNumber?.trim(),
+  }));
+
+// Type export for TypeScript
+export type InsertCertificate = z.infer<typeof insertCertificateSchema>;
